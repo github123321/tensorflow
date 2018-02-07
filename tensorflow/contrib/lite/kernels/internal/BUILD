@@ -296,6 +296,16 @@ cc_library(
 )
 
 cc_library(
+    name = "kernel_utils",
+    srcs = ["kernel_utils.cc"],
+    hdrs = ["kernel_utils.h"],
+    deps = [
+        ":tensor_utils",
+        "//tensorflow/contrib/lite:builtin_op_data",
+    ],
+)
+
+cc_library(
     name = "tensor_utils",
     srcs = [
         "tensor_utils.cc",
@@ -339,6 +349,9 @@ cc_library(
             ":neon_tensor_utils",
         ],
         ":x86": [
+            ":neon_tensor_utils",
+        ],
+        ":k8": [
             ":neon_tensor_utils",
         ],
         ":darwin": [

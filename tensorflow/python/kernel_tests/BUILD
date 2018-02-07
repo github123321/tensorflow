@@ -96,7 +96,6 @@ cuda_py_test(
         "//tensorflow/python:client_testlib",
     ],
     grpc_enabled = True,
-    tags = ["no_oss_gpu_py3"],
 )
 
 cuda_py_test(
@@ -1295,7 +1294,7 @@ cuda_py_test(
 
 cuda_py_test(
     name = "control_flow_ops_py_test",
-    # TOOD(b/70473603): change this back to "small" once the C API is
+    # TODO(b/70473603): change this back to "small" once the C API is
     # permanently enabled
     size = "medium",
     srcs = ["control_flow_ops_py_test.py"],
