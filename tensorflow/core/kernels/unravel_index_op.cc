@@ -39,8 +39,9 @@ class UnravelIndexOp : public OpKernel {
 
   void Compute(OpKernelContext* ctx) override {
     const Tensor& indices_tensor = ctx->input(0);
-    OP_REQUIRES(ctx, TensorShapeUtils::IsVector(indices_tensor.shape()) ||
-                         TensorShapeUtils::IsScalar(indices_tensor.shape()),
+    OP_REQUIRES(ctx,
+                TensorShapeUtils::IsVector(indices_tensor.shape()) ||
+                    TensorShapeUtils::IsScalar(indices_tensor.shape()),
                 errors::InvalidArgument(
                     "The indices can only be scalar or vector, got \"",
                     indices_tensor.shape().DebugString(), "\""));
@@ -88,17 +89,20 @@ class UnravelIndexOp : public OpKernel {
       output = output.constant(indices_tensor.scalar<Tidx>()());
       output = output.binaryExpr(strides, mod_op<Tidx>()) / strides_shifted;
     } else {
-      OP_REQUIRES_OK(ctx, ctx->allocate_output(
-                              0, TensorShape({dims_tensor.NumElements(),
-                                              indices_tensor.NumElements()}),
-                              &output_tensor));
+      OP_REQUIRES_OK(
+          ctx, ctx->allocate_output(0,
+                                    TensorShape({dims_tensor.NumElements(),
+                                                 indices_tensor.NumElements()}),
+                                    &output_tensor));
 
       auto output = output_tensor->matrix<Tidx>();
 
-      Eigen::array<int64, 2> reshape{{dims_tensor.NumElements(), 1}};
-      Eigen::array<int64, 2> bcast({1, indices_tensor.NumElements()});
-      Eigen::array<int64, 2> indices_reshape{{1, indices_tensor.NumElements()}};
-      Eigen::array<int64, 2> indices_bcast({dims_tensor.NumElements(), 1});
+      Eigen::array<Eigen::Index, 2> reshape{{dims_tensor.NumElements(), 1}};
+      Eigen::array<Eigen::Index, 2> bcast({1, indices_tensor.NumElements()});
+      Eigen::array<Eigen::Index, 2> indices_reshape{
+          {1, indices_tensor.NumElements()}};
+      Eigen::array<Eigen::Index, 2> indices_bcast(
+          {dims_tensor.NumElements(), 1});
 
       output = indices_tensor.vec<Tidx>()
                    .reshape(indices_reshape)
