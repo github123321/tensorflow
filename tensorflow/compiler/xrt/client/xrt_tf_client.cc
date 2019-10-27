@@ -24,12 +24,13 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "tensorflow/compiler/xla/status_macros.h"
 #include "tensorflow/compiler/xla/statusor.h"
+#include "tensorflow/core/distributed_runtime/request_id.h"
 #include "tensorflow/core/framework/device_attributes.pb.h"
 #include "tensorflow/core/framework/function.pb.h"
 #include "tensorflow/core/framework/tensor.pb.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "tensorflow/core/lib/random/random.h"
-#include "tensorflow/core/protobuf/eager_service.pb.h"
+#include "tensorflow/core/protobuf/remote_tensor_handle.pb.h"
 #include "tensorflow/core/protobuf/tensorflow_server.pb.h"
 
 namespace tensorflow {
@@ -44,7 +45,7 @@ XrtTfClient::XrtTfClient(ClusterDef cluster_def,
 xla::StatusOr<std::shared_ptr<XrtTfContext>> XrtTfContext::Create(
     const XrtTfContext::Options& options,
     std::shared_ptr<XrtTfClient> tf_client, const std::string& job, int task) {
-  int64 rendezvous_id = random::New64();
+  int64 context_id = random::New64();
 
   eager::CreateContextRequest request;
   ServerDef* server_def = request.mutable_server_def();
@@ -52,7 +53,7 @@ xla::StatusOr<std::shared_ptr<XrtTfContext>> XrtTfContext::Create(
   server_def->set_job_name(job);
   server_def->set_protocol("grpc");
   request.set_keep_alive_secs(60);
-  request.set_rendezvous_id(rendezvous_id);
+  request.set_context_id(context_id);
   request.set_async(options.async);
 
   eager::CreateContextResponse response;
@@ -97,8 +98,9 @@ xla::StatusOr<std::shared_ptr<XrtTfContext>> XrtTfContext::Create(
               return a.name() < b.name();
             });
   return std::make_shared<XrtTfContext>(options, tf_client, eager_client,
-                                        rendezvous_id, response.context_id(),
-                                        std::move(devices), cpu_device_id);
+                                        /*rendezvous_id=*/context_id,
+                                        context_id, std::move(devices),
+                                        cpu_device_id);
 }
 
 XrtTfContext::XrtTfContext(const XrtTfContext::Options& options,
@@ -252,7 +254,7 @@ std::vector<XrtTensorHandle> XrtTfContext::EnqueueOp(
 
   eager::Operation* proto = enqueue_request_->add_queue()->mutable_operation();
   proto->set_id(op->id);
-  proto->set_name(name);
+  proto->set_name(static_cast<std::string>(name));
   for (const XrtTensorHandle* input : inputs) {
     input->Serialize(proto->add_inputs());
   }
@@ -284,15 +286,16 @@ XrtTensorHandle XrtTfContext::SendTensor(
     op_id = op->id;
   }
 
-  eager::SendTensorRequest request;
+  eager::EnqueueRequest request;
   request.set_context_id(context_id_);
-  request.set_op_id(op_id);
-  request.mutable_tensors()->AddAllocated(tensor_proto.release());
-  request.set_device_name(devices_.at(rpc_device_id).name());
-  auto response = std::make_shared<eager::SendTensorResponse>();
+  auto* send_tensor = request.add_queue()->mutable_send_tensor();
+  send_tensor->set_op_id(op_id);
+  send_tensor->mutable_tensors()->AddAllocated(tensor_proto.release());
+  send_tensor->set_device_name(devices_.at(rpc_device_id).name());
+  auto response = std::make_shared<eager::EnqueueResponse>();
   auto context_ptr = shared_from_this();
   absl::Notification done;
-  eager_client_->SendTensorAsync(
+  eager_client_->EnqueueAsync(
       &request, response.get(),
       [context_ptr, op_id, response, &done](Status status) {
         absl::MutexLock lock(&context_ptr->mu_);
@@ -324,7 +327,7 @@ XrtTensorHandle XrtTfContext::SendTensor(
 // worker has other clients that it is servicing, we don't have any collision.
 std::string XrtGetUniqueWireID() {
   static uint64 random_seed = random::New64();
-  static std::atomic<int64> wireid = 0;
+  static std::atomic<int64> wireid(0);
   return absl::StrCat(random_seed, "_", ++wireid);
 }
 
@@ -354,7 +357,7 @@ std::shared_ptr<XrtRecvTensorFuture> XrtTfContext::RecvTensor(
 
   std::string wire_id = XrtGetUniqueWireID();
   EnqueueSend(this, tensor, dtype, /*recv_device_id=*/-1, wire_id,
-              /*host_memory=*/false, /*future=*/response);
+              /*host_memory=*/host_memory, /*future=*/response);
 
   const DeviceAttributes& device = devices().at(device_id);
   RecvTensorRequest request;
@@ -362,11 +365,15 @@ std::shared_ptr<XrtRecvTensorFuture> XrtTfContext::RecvTensor(
   request.set_rendezvous_key(GetRendezvousKey(device.name(),
                                               GetReceiverDevice(this, -1),
                                               device.incarnation(), wire_id));
+  request.set_request_id(GetUniqueRequestId());
+  // TODO(phawkins): verify uniqueness of request ID. Random IDs won't collide
+  // with high probability, but we should probably add code to guard against
+  // collisions nonetheless.
 
   eager_client_->RecvTensorAsync(
       &request, &response->value_,
-      [response](Status status) {
-        VLOG(10) << "RecvTensor complete\n";
+      [response, wire_id](Status status) {
+        VLOG(10) << "RecvTensor complete for " << wire_id;
         response->Notify(status);
       },
       &response->call_options_);
@@ -374,14 +381,15 @@ std::shared_ptr<XrtRecvTensorFuture> XrtTfContext::RecvTensor(
 }
 
 Status XrtTfContext::RegisterFunction(const FunctionDef& def) {
-  eager::RegisterFunctionRequest request;
+  eager::EnqueueRequest request;
   request.set_context_id(context_id_);
-  *request.mutable_function_def() = def;
+  auto* register_function = request.add_queue()->mutable_register_function();
+  *register_function->mutable_function_def() = def;
 
-  eager::RegisterFunctionResponse response;
+  eager::EnqueueResponse response;
   Status status;
   absl::Notification done;
-  eager_client_->RegisterFunctionAsync(&request, &response, [&](Status s) {
+  eager_client_->EnqueueAsync(&request, &response, [&](Status s) {
     status = s;
     done.Notify();
   });
@@ -434,11 +442,12 @@ XrtTensorHandle& XrtTensorHandle::operator=(XrtTensorHandle&& other) {
 void XrtTensorHandle::Serialize(eager::RemoteTensorHandle* proto) const {
   proto->set_op_id(tensor_id_.first);
   proto->set_output_num(tensor_id_.second);
+  proto->set_device(context_->devices_.at(device_id_).name());
 }
 
-AttrValue MakeAttrValue(absl::string_view s) {
+AttrValue MakeAttrValue(std::string s) {
   AttrValue a;
-  a.set_s(s);
+  a.set_s(std::move(s));
   return a;
 }
 

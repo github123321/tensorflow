@@ -1,15 +1,14 @@
 # Description: Operations defined for XRT
 
-licenses(["notice"])  # Apache 2.0
+load("//tensorflow:tensorflow.bzl", "tf_cc_binary", "tf_cc_test")
 
 package(
     default_visibility = [
-        "//learning/brain:__subpackages__",
-        "//tensorflow/compiler/xrt:__subpackages__",
+        "//tensorflow:internal",
+        "//tensorflow/compiler:__subpackages__",
     ],
+    licenses = ["notice"],  # Apache 2.0
 )
-
-load("//tensorflow:tensorflow.bzl", "tf_cc_binary", "tf_cc_test")
 
 cc_library(
     name = "xrt_grpc_eager_client",
@@ -39,11 +38,11 @@ cc_library(
         ":xrt_grpc_eager_client",
         "//tensorflow/compiler/xla:status_macros",
         "//tensorflow/compiler/xla:statusor",
-        "//tensorflow/core:eager_service_proto_cc",
         "//tensorflow/core:lib",
         "//tensorflow/core:lib_internal",
         "//tensorflow/core:protos_all_cc",
         "//tensorflow/core/distributed_runtime:call_options",
+        "//tensorflow/core/distributed_runtime:request_id",
         "//tensorflow/core/distributed_runtime/rpc:grpc_channel",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/container:flat_hash_set",
@@ -64,6 +63,7 @@ cc_library(
         ":xrt_tf_client",
         "//tensorflow/compiler/xla:array2d",
         "//tensorflow/compiler/xla:literal",
+        "//tensorflow/compiler/xla:literal_util",
         "//tensorflow/compiler/xla:status_macros",
         "//tensorflow/compiler/xla:statusor",
         "//tensorflow/compiler/xla/service:computation_placer",

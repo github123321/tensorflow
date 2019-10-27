@@ -72,15 +72,19 @@ using ::tflite::gpu::ValueId;
 - (Status)compileWithDevice:(id<MTLDevice>)device
              taskDescriptor:(ComputeTaskDescriptorPtr)desc
              runtimeOptions:(const RuntimeOptions&)options {
-#if (defined(__MAC_10_13) && __MAC_OS_X_VERSION_MIN_REQUIRED >= __MAC_10_13) ||      \
-    (defined(__IPHONE_10_0) && __IPHONE_OS_VERSION_MIN_REQUIRED >= __IPHONE_10_0) || \
-    (defined(__TVOS_10_0) && __TV_OS_VERSION_MIN_REQUIRED >= __TVOS_10_0)
-  NSString* barrier = @"simdgroup_barrier";
-#else
-  NSString* barrier = @"threadgroup_barrier";
-#endif
+  NSString* barrier;
+  // simdgroup_barrier is supported on macOS 10.13+ and Metal shading language version 2.0
+  if (@available(macOS 10.13, iOS 10.0, tvOS 10.0, *)) {
+    barrier = @"simdgroup_barrier";
+  } else {
+    barrier = @"threadgroup_barrier";
+  }
   NSString* storageType;
   NSString* accumulatorType;
+  NSString* toAccumulatorType = @"";
+  NSString* toAccumulatorType2 = @"";
+  NSString* toAccumulatorType3 = @"";
+  NSString* toAccumulatorType4 = @"";
   if (options.storage_precision == RuntimeOptions::Precision::FP32) {
     storageType = @"float";
     accumulatorType = @"float";
@@ -89,6 +93,10 @@ using ::tflite::gpu::ValueId;
     storageType = @"half";
     if (options.accumulator_precision == RuntimeOptions::Precision::FP32) {
       accumulatorType = @"float";
+      toAccumulatorType = @"float";
+      toAccumulatorType2 = @"float2";
+      toAccumulatorType3 = @"float3";
+      toAccumulatorType4 = @"float4";
     } else {
       accumulatorType = @"half";
     }
@@ -102,6 +110,10 @@ using ::tflite::gpu::ValueId;
     @"ACCUM_FLT2" : [NSString stringWithFormat:@"%@2", accumulatorType],
     @"ACCUM_FLT3" : [NSString stringWithFormat:@"%@3", accumulatorType],
     @"ACCUM_FLT4" : [NSString stringWithFormat:@"%@4", accumulatorType],
+    @"TO_ACCUM_TYPE" : toAccumulatorType,
+    @"TO_ACCUM2_TYPE" : toAccumulatorType2,
+    @"TO_ACCUM3_TYPE" : toAccumulatorType3,
+    @"TO_ACCUM4_TYPE" : toAccumulatorType4,
     @"BARRIER" : barrier,
   };
 
